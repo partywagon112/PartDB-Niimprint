@@ -1,0 +1,17 @@
+[project]
+name = "PartDB-NiimPrint"
+version = "0"
+dependencies = [
+  "requests"
+]
+requires-python = ">=3.11"
+authors = [
+  {name = "Patrick Curtain", email = "patrick.curtain.112@gmail.com"}
+]
+maintainers = [
+  {name = "Patrick Curtain", email = "patrick.curtain.112@gmail.com"}
+]
+description = "App to assist in printing PartDB entities using Niimbot Printers"
+readme = "README.md"
+license = "MIT"
+keywords = ["printer", "labels", "partdb", "part management"]
