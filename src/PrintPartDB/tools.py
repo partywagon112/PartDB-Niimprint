@@ -1,10 +1,9 @@
 import os
-import time 
 
 import numpy as np
 
 import PIL
-from PIL.Image import Image, Resampling
+from PIL.Image import Image
 
 from niimprint import PrinterClient, BluetoothTransport, SerialTransport
 
@@ -26,10 +25,11 @@ def url_to_id(url: str) -> tuple:
     url_sectioned = url.split("/")
 
     for element_type in ELEMENT_TYPES:
-        if element_type in url_sectioned:
-            found_type_index = url_sectioned.index(element_type)
-            if found_type_index < len(url_sectioned):
-                return (element_type, url_sectioned[found_type_index + 1])
+        if element_type not in url_sectioned:
+            continue
+        found_type_index = url_sectioned.index(element_type)
+        if found_type_index < len(url_sectioned):
+            return (element_type, url_sectioned[found_type_index + 1])
                 
     return None
         
@@ -64,7 +64,6 @@ def list_category_names(api: PartDB) -> list:
 
 def list_part_names_in_category(api: PartDB, category_id: str) -> list:
     pass
-
 
 def trim_whitespace(img, threshold=240) -> Image:
     import numpy as np

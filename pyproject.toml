@@ -2,7 +2,9 @@
 name = "PartDB-NiimPrint"
 version = "0"
 dependencies = [
-  "requests"
+  "requests",
+  "appdata",
+  "wxpython"
 ]
 requires-python = ">=3.11"
 authors = [
