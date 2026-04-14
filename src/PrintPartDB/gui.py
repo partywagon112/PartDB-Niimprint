@@ -3,14 +3,10 @@ import json
 import threading
 import requests
 from appdata import AppDataPaths
-
-import PIL
+import serial.tools.list_ports
 from PIL import Image
 
-import serial.tools.list_ports
-
 from PyPartDB import PartDB
-from niimprint.printer import InfoEnum
 from niimprint import PrinterClient, BluetoothTransport, SerialTransport
 
 from PrintPartDB.tools import print_label_from_url, PIL_from_url
@@ -61,10 +57,12 @@ class SetupPanel(wx.Panel):
         try:
             with open(self.app_path.config_path, "r") as file:
                 self.update_config(json.load(file))
-        except Exception as exception:
-            print("Ignored config")
-            print(exception)
-            # Assume any error means you get to just make a new config :(
+        except Exception as e:
+            wx.MessageBox(
+                f"Failed to load config:\n{e}\n\nUsing defaults.",
+                "Config Error",
+                wx.OK | wx.ICON_WARNING
+            )
             self.dump_config()
 
     def set_connection(self, event):
@@ -112,19 +110,75 @@ class SetupPanel(wx.Panel):
         self.bluetooth_connection.config = config["bluetooth"]
         self.serial_connection.config = config["serial"]
         self.partdb_connection.config = config['partdb']
+        self.test_connections()
         self.Layout()
+    
+    def test_connections(self):
+        if self.connection_rbox.GetStringSelection() == "Bluetooth":
+            self.bluetooth_connection.on_connect(None)
+        else:
+            self.serial_connection.on_connect(None)
+        self.partdb_connection.on_test_connection(None)
 
 
-    class BluetoothSetup(wx.Panel):
+    class PrinterSetupBase(wx.Panel):
+        """
+        Base Class to share some common functions.
+        """
+
+        def __init__(self, parent, *args, **kwargs):
+            super().__init__(parent, *args, **kwargs)
+            self.connect_button = wx.Button(self, label="Connect")
+            self.connect_button.Bind(wx.EVT_BUTTON, self.on_connect)
+            self.connection_status = wx.StaticText(self, label="Unconnected")
+
+        def on_connect(self, event):
+            self.connect_button.Disable()
+            self.connection_status.SetLabel("Connecting...")
+
+            thread = threading.Thread(target=self._connect_worker, daemon=True)
+            thread.start()
+
+        def _connect_worker(self):
+            try:
+                printer = self.printer
+                hb = printer.heartbeat()
+
+                battery = (hb.get("powerlevel", 0) / 10) * 100
+
+                wx.CallAfter(
+                    self.connection_status.SetLabel,
+                    f"Connected\t\t\tBattery = {battery:.0f}%"
+                )
+
+            except OSError as e:
+                msg = "Device not reachable"
+            except TimeoutError:
+                msg = "Connection timed out"
+            except ValueError as e:
+                msg = f"Invalid config: {e}"
+            except Exception as e:
+                msg = f"Error: {str(e)}"
+
+            else:
+                return
+
+            wx.CallAfter(
+                self.connection_status.SetLabel,
+                f"Unconnected: {msg}"
+            )
+
+            wx.CallAfter(self.connect_button.Enable)
+
+
+    class BluetoothSetup(PrinterSetupBase):
         def __init__(self, parent, *args, **kwargs):
             super().__init__(parent, *args, **kwargs)
             box = wx.StaticBox(self, label="Bluetooth Settings")
             sizer = wx.StaticBoxSizer(box, wx.VERTICAL)
 
             self.mac_textbox = wx.TextCtrl(self, value="")
-            self.connect_button = wx.Button(self, label="Connect")
-            self.connect_button.Bind(wx.EVT_BUTTON, self.on_connect)
-            self.connection_status = wx.StaticText(self, label="Unconnected")
+
 
             sizer.Add(wx.StaticText(self, label="MAC Address:"), 0, wx.ALL, 5)
             sizer.Add(self.mac_textbox, 0, wx.ALL | wx.EXPAND, 5)
@@ -132,19 +186,7 @@ class SetupPanel(wx.Panel):
             sizer.Add(self.connection_status, 0, wx.ALL | wx.EXPAND, 5)
             self.SetSizer(sizer)
 
-        def on_connect(self, event):
-            """
-            Quickly test connection, will have to start a thread to stop this from blocking.
-            """
-            try:
-                printer = self.printer
-                hb = printer.heartbeat()
-                self.connection_status.SetLabel(f"Connected\t\t\tBattery = {(hb["powerlevel"]/10)*100}%")
-
-            except OSError as exception:
-                # not connected
-                self.connection_status.SetLabel("Unconnected")
-        
+            
         @property
         def printer(self):
             return PrinterClient(BluetoothTransport(self.config['mac']))
@@ -162,16 +204,18 @@ class SetupPanel(wx.Panel):
             self.Layout()
 
 
-    class SerialSetup(wx.Panel):
+    class SerialSetup(PrinterSetupBase):
         def __init__(self, parent, *args, **kwargs):
             super().__init__(parent, *args, **kwargs)
             box = wx.StaticBox(self, label="Serial Settings")
             sizer = wx.StaticBoxSizer(box, wx.VERTICAL)
 
-            self.port_list = wx.ComboBox(self, value=self.__get_serial()[0], choices=self.__get_serial())
-            self.connect_button = wx.Button(self, label="Connect")
-            self.connect_button.Bind(wx.EVT_BUTTON, self.on_connect)
-            self.connection_status = wx.StaticText(self, label="Unconnected")
+            self.port_list = wx.ComboBox(
+                self,
+                value=self.__get_serial()[0],
+                choices=self.__get_serial(),
+                style=wx.CB_READONLY  # optional but recommended
+            )
 
             sizer.Add(wx.StaticText(self, label="Serial Port:"), 0, wx.ALL, 5)
             sizer.Add(self.port_list, 0, wx.ALL | wx.EXPAND, 5)
@@ -189,25 +233,12 @@ class SetupPanel(wx.Panel):
             return {
                 "port": self.port_list.GetValue().strip()
             }
-        
+
         @config.setter
         def config(self, opts: dict):
             # TODO type check
             self.port_list.SetValue(opts["port"])
             self.Layout()
-
-        def on_connect(self, event):
-            """
-            Quickly test connection, will have to start a thread to stop this from blocking.
-            """
-            try:
-                printer = self.printer
-                hb = printer.heartbeat()
-                self.connection_status.SetLabel(f"Connected\t\t\tBattery = {(hb["powerlevel"]/10)*100}%")
-
-            except OSError as exception:
-                # not connected
-                self.connection_status.SetLabel("Unconnected")
         
         @property
         def printer(self):
@@ -257,7 +288,7 @@ class SetupPanel(wx.Panel):
         def __url_exists(url):
             # TODO bit of a mess
             try:
-                response = requests.get(url)           
+                response = requests.get(url, timeout=5)           
             except Exception as exception:
                 return False # Lets just assume it's bad i guess
             
@@ -266,21 +297,36 @@ class SetupPanel(wx.Panel):
 
             return True
                 
-        def on_test_connection(self, event) -> None:
-            if SetupPanel.PartDBAPISetup.__url_exists(self.config["url"]) == False:
-                self.connection_status.SetLabel(f"Unconnected")
-                return
+        def on_test_connection(self, event):
+            self.test_button.Disable()
+            self.connection_status.SetLabel("Testing...")
 
-            info = self.api.getInfo()
-            if type(info) != dict:
-                self.connection_status.SetLabel(f"Unconnected\t\t\tERROR {info}")
-                return
+            threading.Thread(target=self._test_worker, daemon=True).start()
 
-            self.connection_status.SetLabel(f"Connected: {info["title"]} Version: {info["version"]}")
 
-                
+        def _test_worker(self):
+            try:
+                if not self.__url_exists(self.config["url"]):
+                    raise ConnectionError("API URL not reachable")
 
-class PrintFromURLTab(wx.Panel):
+                info = self.api.getInfo()
+
+                if not isinstance(info, dict):
+                    raise ValueError(info)
+
+                msg = f"Connected: {info.get('title', '?')} Version: {info.get('version', '?')}"
+
+                wx.CallAfter(self.connection_status.SetLabel, msg)
+
+            except requests.exceptions.RequestException:
+                wx.CallAfter(self.connection_status.SetLabel, "Network error")
+            except Exception as e:
+                wx.CallAfter(self.connection_status.SetLabel, f"Unconnected\t\t\t{e}")
+
+            finally:
+                wx.CallAfter(self.test_button.Enable)
+
+class PrintPanel(wx.Panel):
     def __init__(self, parent, setup: SetupPanel, *args, **kwargs):
         super().__init__(parent=parent, *args, **kwargs)
 
@@ -341,18 +387,27 @@ class PrintFromURLTab(wx.Panel):
 class MainFrame(wx.Frame):
     def __init__(self):
         super().__init__(parent=None, title='PartDB Niimbot Printer')
-        self.SetSize(500, 700)
 
         # Setup each tab of the interface
         nb = wx.Notebook(self)
         self.setup_tab = SetupPanel(nb)
-        self.print_from_url = PrintFromURLTab(nb, self.setup_tab)
+        self.print_tab = PrintPanel(nb, self.setup_tab)
         nb.AddPage(self.setup_tab, "Setup")
-        nb.AddPage(self.print_from_url, "Print from URL")
+        nb.AddPage(self.print_tab, "Print")
 
         sizer = wx.BoxSizer()
         sizer.Add(nb, 1, wx.EXPAND)
         self.SetSizer(sizer)
+
+        self.Fit()
+
+        w, h = self.GetSize()
+
+        # Force a more reasonable width
+        min_width = 500
+        self.SetSize((max(w, min_width), h))
+
+        self.SetSizeHints(self.GetSize())
 
         self.Show()
 
