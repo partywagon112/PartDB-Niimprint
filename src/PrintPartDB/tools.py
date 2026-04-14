@@ -121,6 +121,14 @@ def print_partdb_labels(api: PartDB, printer: PrinterClient, paper_height_mm: fl
 
         printer.print_image(image, 3)
 
+def PIL_from_url(api: PartDB, url: str, profileId: int) -> Image:
+    result = url_to_id(url)
+    if result == None:
+        return
+    elementType, elementId = result
+
+    return label_to_PILs(api, profileId, [elementId], elementType)[0]
+
 def print_label_from_url(api: PartDB, printer: PrinterClient, url: str, paper_height_mm: float, paper_width_mm:float, paper_height_px:int, profileId: int, efficient_whitespace:bool = True) -> Image:
     result = url_to_id(url)
     if result == None:
@@ -136,5 +144,5 @@ def print_label_from_url(api: PartDB, printer: PrinterClient, url: str, paper_he
         profileId=profileId, 
         elementIds=[elementId], 
         elementType=elementType, 
-        efficient_whitespace=False
+        efficient_whitespace=efficient_whitespace
     )

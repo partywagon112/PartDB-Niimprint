@@ -13,12 +13,7 @@ from PyPartDB import PartDB
 from niimprint.printer import InfoEnum
 from niimprint import PrinterClient, BluetoothTransport, SerialTransport
 
-from tools import *
-
-
-class PartDBConfigureFrame(wx.Panel):
-    def __init__(self, parent, *args, **kwargs):
-        super().__init__(parent=parent, *args, **kwargs)
+from PrintPartDB.tools import print_label_from_url, PIL_from_url
 
 
 class SetupPanel(wx.Panel):
@@ -41,17 +36,17 @@ class SetupPanel(wx.Panel):
         # Setup panels for each connection type
         self.bluetooth_connection = SetupPanel.BluetoothSetup(self)
         self.serial_connection = SetupPanel.SerialSetup(self)
-        self.partdb_conn = SetupPanel.PartDBAPISetup(self)
+        self.partdb_connection = SetupPanel.PartDBAPISetup(self)
 
         self.load_app_path()
         self.save_button = wx.Button(self, label="Save")
-        self.save_button.Bind(wx.EVT_BUTTON, self.save_config)
+        self.save_button.Bind(wx.EVT_BUTTON, self.dump_config)
 
         # Add widgets to sizer
         sizer.Add(self.connection_rbox, 0, wx.ALL | wx.EXPAND, 10)
         sizer.Add(self.bluetooth_connection, 0, wx.ALL | wx.EXPAND, 10)
         sizer.Add(self.serial_connection, 0, wx.ALL | wx.EXPAND, 10)
-        sizer.Add(self.partdb_conn, 0, wx.ALL | wx.EXPAND, 10)
+        sizer.Add(self.partdb_connection, 0, wx.ALL | wx.EXPAND, 10)
         sizer.Add(self.save_button, 0, wx.ALL | wx.EXPAND, 10)
 
         self.SetSizer(sizer)
@@ -70,7 +65,7 @@ class SetupPanel(wx.Panel):
             print("Ignored config")
             print(exception)
             # Assume any error means you get to just make a new config :(
-            self.save_config()
+            self.dump_config()
 
     def set_connection(self, event):
         selection = self.connection_rbox.GetStringSelection()
@@ -97,9 +92,9 @@ class SetupPanel(wx.Panel):
 
     @property 
     def api(self) -> PartDB:
-        return PartDB(self.partdb_conn.config["url"], self.partdb_conn.config["key"])
+        return PartDB(self.partdb_connection.config["url"], self.partdb_connection.config["key"])
 
-    def save_config(self, e=None):
+    def dump_config(self, e=None):
         """
         Builds up a config
         """
@@ -107,7 +102,7 @@ class SetupPanel(wx.Panel):
         config.update(self.connection)
         config['bluetooth'] = self.bluetooth_connection.config
         config['serial'] = self.serial_connection.config
-        config['partdb'] = self.partdb_conn.config
+        config['partdb'] = self.partdb_connection.config
         with open(self.app_path.config_path, "w") as file:
             json.dump(config, file, indent=4)
         return config
@@ -116,8 +111,9 @@ class SetupPanel(wx.Panel):
         self.connection = config["connection"]
         self.bluetooth_connection.config = config["bluetooth"]
         self.serial_connection.config = config["serial"]
-        self.partdb_conn.config = config['partdb']
+        self.partdb_connection.config = config['partdb']
         self.Layout()
+
 
     class BluetoothSetup(wx.Panel):
         def __init__(self, parent, *args, **kwargs):
@@ -164,6 +160,7 @@ class SetupPanel(wx.Panel):
             # TODO type check
             self.mac_textbox.SetValue(opts["mac"])
             self.Layout()
+
 
     class SerialSetup(wx.Panel):
         def __init__(self, parent, *args, **kwargs):
@@ -284,20 +281,73 @@ class SetupPanel(wx.Panel):
                 
 
 class PrintFromURLTab(wx.Panel):
-    def __init__(self, parent, *args, **kwargs):
+    def __init__(self, parent, setup: SetupPanel, *args, **kwargs):
         super().__init__(parent=parent, *args, **kwargs)
+
+        self.setup = setup
+        self.sizer = wx.BoxSizer(wx.VERTICAL)
+
+        self.url_textbox = wx.TextCtrl(self, value="")
+
+        self.preview_button = wx.Button(self, label="Preview")
+        self.preview_button.Bind(wx.EVT_BUTTON, self.preview)
+
+        self.print_button = wx.Button(self, label="Print")
+        self.print_button.Bind(wx.EVT_BUTTON, self.print)
+
+        # Placeholder for preview image
+        self.preview_image = wx.StaticBitmap(self)
+
+        self.sizer.Add(self.url_textbox, 0, wx.ALL | wx.EXPAND, 5)
+        self.sizer.Add(self.preview_button, 0, wx.ALL | wx.EXPAND, 5)
+        self.sizer.Add(self.print_button, 0, wx.ALL | wx.EXPAND, 5)
+        self.sizer.Add(self.preview_image, 1, wx.ALL | wx.EXPAND, 5)
+
+        self.SetSizer(self.sizer)
+
+    @staticmethod
+    def __convert_pil_to_wxStaticBitmap(pil_image):
+        width, height = pil_image.size
+
+        wx_image = wx.Image(width, height)
+        wx_image.SetData(pil_image.convert("RGB").tobytes())
+
+        return wx_image.ConvertToBitmap()
+
+    @property
+    def uri(self):
+        return self.url_textbox.GetValue().strip()
+
+    def preview(self, event):
+        try:
+            pil_img = PIL_from_url(self.setup.api, self.uri, profileId=2)
+            bitmap = self.__convert_pil_to_wxStaticBitmap(pil_img)
+
+            self.preview_image.SetBitmap(bitmap)
+            self.Layout()
+
+        except Exception as e:
+            wx.MessageBox(f"Preview failed:\n{e}", "Error", wx.OK | wx.ICON_ERROR)
+
+    def print(self, event):
+        print_label_from_url(
+            self.setup.api,
+            self.setup.printer,
+            self.uri,
+            15, 30, 132, 2, True
+        )
 
 
 class MainFrame(wx.Frame):
     def __init__(self):
         super().__init__(parent=None, title='PartDB Niimbot Printer')
-        self.SetSize(400, 600)
+        self.SetSize(500, 700)
 
         # Setup each tab of the interface
         nb = wx.Notebook(self)
-        self.connections_tab = SetupPanel(nb)
-        self.print_from_url = PrintFromURLTab(nb)
-        nb.AddPage(self.connections_tab, "Setup")
+        self.setup_tab = SetupPanel(nb)
+        self.print_from_url = PrintFromURLTab(nb, self.setup_tab)
+        nb.AddPage(self.setup_tab, "Setup")
         nb.AddPage(self.print_from_url, "Print from URL")
 
         sizer = wx.BoxSizer()
